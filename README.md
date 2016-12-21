@@ -1,4 +1,4 @@
-# stream-github
+# stream-wootric
 
 A data stream generator for the Wootric API, written in python 3.
 
