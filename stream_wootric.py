@@ -8,35 +8,18 @@ import json
 import datetime
 
 session = requests.Session()
-logger = logging.getLogger()
-bookmark = {}
-
-def get_env_or_throw(key):
-    value = os.environ.get(key)
-
-    if value == None:
-        raise Exception('Missing ' + key + ' environment variable!')
-
-    return value
-
-def configure_logging(level=logging.DEBUG):
-    global logger
-    logger.setLevel(level)
-    ch = logging.StreamHandler()
-    ch.setLevel(level)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    ch.setFormatter(formatter)
-    logger.addHandler(ch)
+logger = stitchstream.get_logger()
+state = {}
 
 def authed_get(url):
     return session.request(method='get', url=url)
 
 def authed_get_all_pages(baseUrl, bookmarkName):
-    global bookmark
+    global state
     while True:
         url = baseUrl
-        if bookmark.get(bookmarkName, None):
-            url = baseUrl + '&created[gt]=' + bookmark[bookmarkName]
+        if state.get(bookmarkName, None):
+            url = baseUrl + '&created[gt]=' + state[bookmarkName]
         r = authed_get(url)
         rJson = r.json();
         yield r
@@ -96,7 +79,7 @@ response_schema = {'type': 'object',
              }
 
 def get_all_new_responses():
-    global bookmark
+    global state
     
     last_response_unixtime = None
     requestUrl = 'https://api.wootric.com/v1/responses?per_page=50&sort_order=asc'
@@ -115,12 +98,12 @@ def get_all_new_responses():
         #there is a limitation of wootric's API that only allows you to get 50 records at a time and has
         #no pagination trigger other than created_at date; as such if >50 records have the same created_at
         #date you hit an infinite loop of requests; this breaks you out of that loop if it happens
-        if bookmark.get('responses', None) == str(last_response_unixtime) and len(responses) > 1:
+        if state.get('responses', None) == str(last_response_unixtime) and len(responses) > 1:
             logger.error('Breaking retrieval loop for responses at unixtime ' + str(last_response_unixtime) + ', will cause missing data')
             last_response_unixtime = last_response_unixtime + 1
 
         if last_response_unixtime: #can be none if no new responses
-            bookmark['responses'] = str(last_response_unixtime)
+            state['responses'] = str(last_response_unixtime)
 
 
 decline_schema = {'type': 'object',
@@ -148,7 +131,7 @@ decline_schema = {'type': 'object',
              }
 
 def get_all_new_declines():
-    global bookmark
+    global state
     
     last_decline_unixtime = None
     requestUrl = 'https://api.wootric.com/v1/declines?per_page=50&sort_order=asc'
@@ -167,12 +150,12 @@ def get_all_new_declines():
         #there is a limitation of wootric's API that only allows you to get 50 records at a time and has
         #no pagination trigger other than created_at date; as such if >50 records have the same created_at
         #date you hit an infinite loop of requests; this breaks you out of that loop if it happens
-        if bookmark.get('declines', None) == str(last_decline_unixtime) and len(declines) > 1:
+        if state.get('declines', None) == str(last_decline_unixtime) and len(declines) > 1:
             logger.error('Breaking retrieval loop for declines at unixtime ' + str(last_decline_unixtime) + ', will cause missing data')
             last_decline_unixtime = last_decline_unixtime + 1
 
         if last_decline_unixtime: #can be None if no new declines
-            bookmark['declines'] = str(last_decline_unixtime)
+            state['declines'] = str(last_decline_unixtime)
 
 enduser_schema = {'type': 'object',
                  'properties': {
@@ -213,7 +196,7 @@ enduser_schema = {'type': 'object',
              }
 
 def get_all_new_endusers():
-    global bookmark
+    global state
     
     last_enduser_unixtime = None
     requestUrl = 'https://api.wootric.com/v1/end_users?per_page=50&sort_order=asc'
@@ -234,12 +217,12 @@ def get_all_new_endusers():
         #there is a limitation of wootric's API that only allows you to get 50 records at a time and has
         #no pagination trigger other than created_at date; as such if >50 records have the same created_at
         #date you hit an infinite loop of requests; this breaks you out of that loop if it happens
-        if bookmark.get('endusers', None) == str(last_enduser_unixtime) and len(endusers) > 1:
+        if state.get('endusers', None) == str(last_enduser_unixtime) and len(endusers) > 1:
             logger.error('Breaking retrieval loop for enduers at unixtime ' + str(last_enduser_unixtime) + ', will cause missing data')
             last_enduser_unixtime = last_enduser_unixtime + 1
 
         if last_enduser_unixtime: #can be None if no new endusers
-            bookmark['endusers'] = str(last_enduser_unixtime)
+            state['endusers'] = str(last_enduser_unixtime)
 
 def get_access_token(client_id, client_secret):
     data = {
@@ -253,42 +236,81 @@ def get_access_token(client_id, client_secret):
     raise Exception('Access Token Retrieval Failed: ' + str(response))
 
 
-if __name__ == '__main__':
-    configure_logging()
-    parser = argparse.ArgumentParser(prog='Wootric Streamer')
-    parser.add_argument('FILENAME', help='File containing the last bookmark value', nargs='?')
-    args = parser.parse_args()
+def do_check(args):
+    raise Exception("check command is not supported yet")
 
-    client_id = get_env_or_throw('WOOTRIC_CLIENT_ID')
-    client_secret = get_env_or_throw('WOOTRIC_CLIENT_SECRET')
-    access_token = get_access_token(client_id, client_secret)
+
+def do_sync(args):
+    with open(args.config) as config_file:
+        config = json.load(config_file)
+
+    missing_keys = []
+    for key in ['client_id', 'client_secret']:
+        if key not in config:
+            missing_keys += [key]
+
+    if len(missing_keys) > 0:
+        logger.fatal("Missing required configuration keys: {}".format(missing_keys))
+
+    access_token = get_access_token(config['client_id'], config['client_secret'])
     session.headers.update({'authorization': 'Bearer ' + access_token})
 
-    bookmark = {}
-    if args.FILENAME:
-        with open(args.FILENAME, 'r') as file:
+    state = {}
+    if args.state:
+        with open(args.state, 'r') as file:
             for line in file:
-                bookmark = json.loads(line.strip())
+                state = json.loads(line.strip())
 
-    if bookmark.get('endusers', None):
-        logger.info('Replicating endusers since %s', bookmark.get('endusers', None))
+    if state.get('endusers', None):
+        logger.info('Replicating endusers since %s', state.get('endusers', None))
     else:
         logger.info('Replicating all endusers')
     stitchstream.write_schema('endusers', enduser_schema)
     get_all_new_endusers()
 
-    if bookmark.get('responses', None):
-        logger.info('Replicating responses since %s', bookmark.get('responses', None))
+    if state.get('responses', None):
+        logger.info('Replicating responses since %s', state.get('responses', None))
     else:
         logger.info('Replicating all responses')
     stitchstream.write_schema('responses', response_schema)
     get_all_new_responses()
 
-    if bookmark.get('declines', None):
-        logger.info('Replicating declines since %s', bookmark.get('declines', None))
+    if state.get('declines', None):
+        logger.info('Replicating declines since %s', state.get('declines', None))
     else:
         logger.info('Replicating all declines')
     stitchstream.write_schema('declines', decline_schema)
     get_all_new_declines()
 
-    stitchstream.write_bookmark(bookmark)
+    stitchstream.write_state(state)
+
+
+def main():
+
+    parser = argparse.ArgumentParser()
+
+    subparsers = parser.add_subparsers()
+
+    parser_check = subparsers.add_parser('check')
+    parser_check.set_defaults(func=do_check)
+
+    parser_sync = subparsers.add_parser('sync')
+    parser_sync.set_defaults(func=do_sync)
+
+    for subparser in [parser_check, parser_sync]:
+        subparser.add_argument(
+            '-c', '--config', help='Config file', required=True)
+        subparser.add_argument(
+            '-s', '--state', help='State file')
+
+    args = parser.parse_args()
+
+    if 'func' in args:
+        args.func(args)
+    else:
+        parser.print_help()
+        exit(1)
+
+    
+if __name__ == '__main__':
+    main()
